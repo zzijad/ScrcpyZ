@@ -1,0 +1,7 @@
+bin/
+obj/
+publish/
+scrcpy-win64-*/
+*.zip
+.vs/
+*.user

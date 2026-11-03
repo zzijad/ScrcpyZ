@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ScrcpyZ</AssemblyName>
+    <RootNamespace>ScrcpyZ</RootNamespace>
+    <Version>1.5.0</Version>
+    <ApplicationIcon>ScrcpyZ.ico</ApplicationIcon>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="ScrcpyZ.ico" />
+  </ItemGroup>
+</Project>
