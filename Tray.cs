@@ -1,15 +1,18 @@
 using System.Runtime.InteropServices;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
+using System.Windows.Threading;
 
 namespace ScrcpyZ;
 
 /// <summary>
 /// Ikona u system trayu (pored sata) preko Win32 Shell_NotifyIcon — bez WinForms-a.
-/// Levi klik → Activate, desni klik → Menu.
+/// Levi klik → Activate, desni klik → pravi Windows meni (TrackPopupMenuEx).
 /// </summary>
+public record TrayMenuItem(string Text, Action? OnClick, bool IsDefault = false)
+{
+    public static TrayMenuItem Separator => new("-", null);
+}
+
 public sealed class TrayIcon : IDisposable
 {
     const int WM_TRAY = 0x8000 + 77;          // WM_APP + n
@@ -47,6 +50,20 @@ public sealed class TrayIcon : IDisposable
     [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr hIcon);
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int RegisterWindowMessage(string name);
+    [DllImport("user32.dll")] static extern IntPtr CreatePopupMenu();
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern bool AppendMenu(IntPtr hMenu, uint flags, UIntPtr id, string? text);
+    [DllImport("user32.dll")] static extern bool DestroyMenu(IntPtr hMenu);
+    [DllImport("user32.dll")] static extern bool SetMenuDefaultItem(IntPtr hMenu, uint item, uint byPos);
+    [DllImport("user32.dll")]
+    static extern int TrackPopupMenuEx(IntPtr hMenu, uint flags, int x, int y, IntPtr hWnd, IntPtr tpm);
+    [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
+    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
+
+    const uint MF_STRING = 0x0, MF_SEPARATOR = 0x800;
+    const uint TPM_RIGHTBUTTON = 0x2, TPM_NONOTIFY = 0x80, TPM_RETURNCMD = 0x100;
 
     readonly HwndSource _src;
     readonly IntPtr _icon;
@@ -56,7 +73,8 @@ public sealed class TrayIcon : IDisposable
     string _tip = "ScrcpyZ";
 
     public event Action? Activate;
-    public ContextMenu? Menu { get; set; }
+    public List<TrayMenuItem> Items { get; } = new();
+    bool _menuOpen;
 
     public TrayIcon()
     {
@@ -116,7 +134,8 @@ public sealed class TrayIcon : IDisposable
         {
             int ev = (int)(lParam.ToInt64() & 0xFFFF);
             if (ev == WM_LBUTTONUP || ev == WM_LBUTTONDBLCLK) Activate?.Invoke();
-            else if (ev == WM_RBUTTONUP) ShowMenu();
+            else if (ev == WM_RBUTTONUP && !_menuOpen)
+                Dispatcher.CurrentDispatcher.InvokeAsync(ShowMenu); // izvan obrade poruke
             handled = true;
         }
         else if (msg == _taskbarCreated && _added)
@@ -129,12 +148,36 @@ public sealed class TrayIcon : IDisposable
 
     void ShowMenu()
     {
-        if (Menu == null) return;
-        SetForegroundWindow(_src.Handle);
-        Menu.Placement = PlacementMode.MousePoint;
-        Menu.IsOpen = true;
-        // da se meni zatvori kad se klikne bilo gde van njega
-        if (PresentationSource.FromVisual(Menu) is HwndSource ps) SetForegroundWindow(ps.Handle);
+        if (Items.Count == 0 || _menuOpen) return;
+        _menuOpen = true;
+        var menu = CreatePopupMenu();
+        try
+        {
+            for (int i = 0; i < Items.Count; i++)
+            {
+                var it = Items[i];
+                if (it.Text == "-") AppendMenu(menu, MF_SEPARATOR, UIntPtr.Zero, null);
+                else
+                {
+                    AppendMenu(menu, MF_STRING, (UIntPtr)(uint)(i + 1), it.Text);
+                    if (it.IsDefault) SetMenuDefaultItem(menu, (uint)(i + 1), 0);
+                }
+            }
+
+            GetCursorPos(out var pt);
+            // Bez ovoga Windows odmah zatvara meni / ne zatvara ga klikom van njega
+            SetForegroundWindow(_src.Handle);
+            int cmd = TrackPopupMenuEx(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
+                pt.X, pt.Y, _src.Handle, IntPtr.Zero);
+            PostMessage(_src.Handle, 0 /* WM_NULL */, IntPtr.Zero, IntPtr.Zero);
+
+            if (cmd > 0 && cmd <= Items.Count) Items[cmd - 1].OnClick?.Invoke();
+        }
+        finally
+        {
+            DestroyMenu(menu);
+            _menuOpen = false;
+        }
     }
 
     public void Dispose()

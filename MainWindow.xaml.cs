@@ -7,9 +7,6 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
 using Microsoft.Win32;
-using MenuItem = System.Windows.Controls.MenuItem;
-using ContextMenu = System.Windows.Controls.ContextMenu;
-using Separator = System.Windows.Controls.Separator;
 
 namespace ScrcpyZ;
 
@@ -424,28 +421,18 @@ public partial class MainWindow : Window
         var t = new TrayIcon();
         t.Activate += ShowFromTray;
 
-        MenuItem Item(string header, RoutedEventHandler click, bool bold = false)
-        {
-            var mi = new MenuItem { Header = header };
-            if (bold) mi.FontWeight = FontWeights.SemiBold;
-            mi.Click += click;
-            return mi;
-        }
-
-        var menu = new ContextMenu();
-        menu.Items.Add(Item("Otvori ScrcpyZ", (_, _) => ShowFromTray(), bold: true));
-        menu.Items.Add(Item("Prikaži scrcpy prozor", async (_, _) =>
+        t.Items.Add(new TrayMenuItem("Otvori ScrcpyZ", ShowFromTray, IsDefault: true));
+        t.Items.Add(new TrayMenuItem("Prikaži scrcpy prozor", async () =>
         {
             if (!ScrcpyRunning || _scrcpy == null) return;
             _scrcpy.Refresh();
             await ScrcpyKeys.BringToFrontAsync(_scrcpy.MainWindowHandle);
         }));
-        menu.Items.Add(new Separator());
-        menu.Items.Add(Item("🔓  Otključaj telefon", BtnUnlock_Click));
-        menu.Items.Add(Item("Ugasi ekran telefona", BtnScreenOff_Click));
-        menu.Items.Add(new Separator());
-        menu.Items.Add(Item("Zatvori ScrcpyZ", (_, _) => Close()));
-        t.Menu = menu;
+        t.Items.Add(TrayMenuItem.Separator);
+        t.Items.Add(new TrayMenuItem("Otključaj telefon", () => BtnUnlock_Click(this, new RoutedEventArgs())));
+        t.Items.Add(new TrayMenuItem("Ugasi ekran telefona", () => BtnScreenOff_Click(this, new RoutedEventArgs())));
+        t.Items.Add(TrayMenuItem.Separator);
+        t.Items.Add(new TrayMenuItem("Zatvori ScrcpyZ", Close));
         return t;
     }
 
