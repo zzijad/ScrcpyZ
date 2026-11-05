@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  SCRCPY_VERSION: "5.0.1"
+
 jobs:
   build:
     runs-on: windows-latest
@@ -18,17 +21,42 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Publish
-        run: dotnet publish ScrcpyZ.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
+      - name: Publish (self-contained, ne treba .NET na računaru)
+        run: >
+          dotnet publish ScrcpyZ.csproj -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true -p:DebugType=none -o publish
+
+      - name: Paket sa scrcpy-jem
+        shell: pwsh
+        run: |
+          $v = $env:SCRCPY_VERSION
+          $ver = "1.6.${{ github.run_number }}"
+          Invoke-WebRequest "https://github.com/Genymobile/scrcpy/releases/download/v$v/scrcpy-win64-v$v.zip" -OutFile scrcpy.zip
+          Expand-Archive scrcpy.zip -DestinationPath tmp
+          $dst = "pkg\ScrcpyZ"
+          New-Item -ItemType Directory $dst -Force | Out-Null
+          Copy-Item "tmp\scrcpy-win64-v$v\*" $dst -Recurse
+          Rename-Item "$dst\LICENSE.txt" "LICENSE-scrcpy.txt"
+          Copy-Item publish\ScrcpyZ.exe $dst
+          Copy-Item README.md $dst
+          Compress-Archive -Path $dst -DestinationPath "ScrcpyZ-$ver-win64.zip"
+          "VER=$ver" | Out-File $env:GITHUB_ENV -Append
 
       - uses: actions/upload-artifact@v4
         with:
           name: ScrcpyZ
-          path: publish/ScrcpyZ.exe
+          path: ScrcpyZ-*-win64.zip
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.5.${{ github.run_number }}
-          name: ScrcpyZ 1.5.${{ github.run_number }}
-          files: publish/ScrcpyZ.exe
+          tag_name: v${{ env.VER }}
+          name: ScrcpyZ ${{ env.VER }}
+          body: |
+            **ScrcpyZ-${{ env.VER }}-win64.zip** — sve u jednom: ScrcpyZ + scrcpy ${{ env.SCRCPY_VERSION }} (sa adb-om). Raspakuj bilo gde i pokreni ScrcpyZ.exe. Ne treba instalirati .NET.
+
+            **ScrcpyZ.exe** — samo program, za ažuriranje postojećeg foldera.
+          files: |
+            ScrcpyZ-*-win64.zip
+            publish/ScrcpyZ.exe

@@ -2,11 +2,19 @@
 
 Pokretač za scrcpy koji pronalazi telefon po imenu (mDNS). Ne morate da upisujete IP adresu.
 
-## Build
-Pokrenite `build.bat`. Za to je potreban .NET 10 SDK. Gotov program je `publish\ScrcpyZ.exe`.
+## Preuzimanje
+Na stranici **Releases** preuzmi `ScrcpyZ-x.y.z-win64.zip`, raspakuj ga bilo gde i pokreni `ScrcpyZ.exe`.
+U zipu su ScrcpyZ i scrcpy (sa adb-om). Ništa se ne instalira, a ne treba ni .NET.
+Za ažuriranje je dovoljno zameniti `ScrcpyZ.exe` (iz istog Releasea).
+
+scrcpy je delo Genymobile-a, licenca Apache 2.0 (`LICENSE-scrcpy.txt`).
+
+## Build (ručno)
+Pokrenite `build.bat` (potreban je .NET 10 SDK). Gotov program je `publish\ScrcpyZ.exe`.
+Svaki push na GitHub automatski pravi novi Release.
 
 ## Prvo pokretanje
-1. Kopirajte ScrcpyZ.exe u scrcpy folder ili izaberite folder klikom na „Folder scrcpy-ja…“.
+1. Ako koristite zip iz Releases, scrcpy je već tu. Inače kopirajte ScrcpyZ.exe u scrcpy folder ili izaberite folder klikom na „Folder scrcpy-ja…“.
 2. Na telefonu uključite Wireless debugging, kliknite „Upari telefon…“ i unesite IP:port i kod. Ovo se radi samo jednom.
 3. Izaberite telefon, kliknite „★ Omiljeni“, a zatim „Poveži“.
 
