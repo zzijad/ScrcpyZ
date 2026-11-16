@@ -199,6 +199,12 @@ public static class DeviceScanner
         return m.Success ? m.Groups[1].Value : null;
     }
 
+    static async Task Disconnect(string adb, string serial)
+    {
+        HwCache.Remove(serial);
+        try { await Proc.RunAsync(adb, $"disconnect {serial}", 5000); } catch { }
+    }
+
     public static async Task<List<DeviceInfo>> ScanAsync(string adb, Settings s)
     {
         var result = new List<DeviceInfo>();
@@ -215,13 +221,24 @@ public static class DeviceScanner
             bool isIp = IpSerial.IsMatch(serial);
             bool usb = !isTls && !isIp;
 
+            // Stara IP veza koja više ne radi (telefon dobio novu IP adresu ili port) — izbaci je
+            if (isIp && state == "offline")
+            {
+                await Disconnect(adb, serial);
+                continue;
+            }
+
             string? hw = usb ? serial : HwSerial(serial);
+            if (hw == null) HwCache.TryGetValue(serial, out hw);
             if (hw == null && state == "device")
             {
-                if (!HwCache.TryGetValue(serial, out hw))
+                var p = (await Proc.RunAsync(adb, $"-s {serial} shell getprop ro.serialno", 5000)).Trim();
+                if (p.Length > 0 && !p.Contains(' ')) { hw = p; HwCache[serial] = p; }
+                else if (isIp)
                 {
-                    var p = (await Proc.RunAsync(adb, $"-s {serial} shell getprop ro.serialno", 5000)).Trim();
-                    if (p.Length > 0 && !p.Contains(' ')) { hw = p; HwCache[serial] = p; }
+                    // adb misli da je povezan, ali telefon ne odgovara na staroj adresi
+                    await Disconnect(adb, serial);
+                    continue;
                 }
             }
 
@@ -252,7 +269,19 @@ public static class DeviceScanner
             string key = HwSerial(inst) ?? inst;
 
             var existing = result.FirstOrDefault(d => !d.IsUsb && (d.Key == key || d.Serial == addr));
-            if (existing != null) { existing.Address ??= addr; continue; }
+            if (existing != null)
+            {
+                if (existing.Serial != null && IpSerial.IsMatch(existing.Serial) && existing.Serial != addr)
+                {
+                    // Telefon se oglašava na novoj adresi/portu → stara veza je mrtva, poveži se na novu
+                    await Disconnect(adb, existing.Serial);
+                    existing.Serial = null;
+                    existing.State = "available";
+                    existing.Address = addr;
+                }
+                else existing.Address ??= addr;
+                continue;
+            }
 
             result.Add(new DeviceInfo
             {
