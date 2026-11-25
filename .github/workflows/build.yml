@@ -31,7 +31,8 @@ jobs:
         shell: pwsh
         run: |
           $v = $env:SCRCPY_VERSION
-          $ver = "1.6.${{ github.run_number }}"
+          $v2 = ([xml](Get-Content ScrcpyZ.csproj)).Project.PropertyGroup.Version -replace '^(\d+\.\d+).*','$1'
+          $ver = "$v2.${{ github.run_number }}"
           Invoke-WebRequest "https://github.com/Genymobile/scrcpy/releases/download/v$v/scrcpy-win64-v$v.zip" -OutFile scrcpy.zip
           Expand-Archive scrcpy.zip -DestinationPath tmp
           $dst = "pkg\ScrcpyZ"
