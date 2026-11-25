@@ -199,6 +199,7 @@ public static class ScrcpyKeys
 {
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
@@ -236,6 +237,8 @@ public static class ScrcpyKeys
         if (IsIconic(hwnd)) ShowWindow(hwnd, 9); // SW_RESTORE
         SetForegroundWindow(hwnd);
         await Task.Delay(200);
+        // tastatura ide aktivnom prozoru — ako scrcpy nije u fokusu, Alt+O bi otišao drugom programu
+        if (GetForegroundWindow() != hwnd) return false;
         keybd_event(VK_LMENU, 0, 0, UIntPtr.Zero);
         keybd_event(VK_O, 0, 0, UIntPtr.Zero);
         await Task.Delay(30);

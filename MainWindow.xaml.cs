@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     Process? _scrcpy;
     string? _currentSerial;
     TrayIcon? _tray;
+    DateTime _nextAutoTry = DateTime.MinValue;
 
     string Adb => _scrcpyDir != null && File.Exists(Path.Combine(_scrcpyDir, "adb.exe"))
         ? Path.Combine(_scrcpyDir, "adb.exe")
@@ -140,7 +141,7 @@ public partial class MainWindow : Window
 
     async Task RefreshAsync()
     {
-        if (_scanning) return;
+        if (_scanning || _launching) return;
         if (_scrcpyDir == null && !AdbOnPath())
         {
             Status("adb nije pronađen. Izaberi folder u kom su scrcpy.exe i adb.exe.");
@@ -167,13 +168,15 @@ public partial class MainWindow : Window
             if (!ScrcpyRunning && !_launching && _s.SavedTimeoutKey != null)
                 await RestoreTimeoutAsync();
 
-            if (ChkAutoConnect.IsChecked == true && !_autoLaunched && !_launching && _s.FavoriteKey != null && !ScrcpyRunning)
+            if (ChkAutoConnect.IsChecked == true && !_autoLaunched && !_launching && _s.FavoriteKey != null
+                && !ScrcpyRunning && DateTime.UtcNow >= _nextAutoTry)
             {
                 var fav = _devices.FirstOrDefault(d => d.IsFavorite && d.State is "device" or "available");
                 if (fav != null)
                 {
                     _autoLaunched = true;
-                    await ConnectAndLaunchAsync(fav);
+                    _scanning = false; // ConnectAndLaunch sam osvežava listu na kraju
+                    await ConnectAndLaunchAsync(fav, auto: true);
                 }
             }
         }
@@ -236,7 +239,7 @@ public partial class MainWindow : Window
         return null;
     }
 
-    async Task ConnectAndLaunchAsync(DeviceInfo d)
+    async Task ConnectAndLaunchAsync(DeviceInfo d, bool auto = false)
     {
         if (_launching) return;
         if (_scrcpyDir == null)
@@ -262,6 +265,7 @@ public partial class MainWindow : Window
 
         _launching = true;
         _autoLaunched = true; // ručno pokretanje: automatsko više ne treba
+        bool started = false;
         SaveOptions();
         BtnConnect.IsEnabled = false;
         try
@@ -277,12 +281,18 @@ public partial class MainWindow : Window
 
             if (_s.StayAwake) await KeepAwakeAsync(serial, d.Key);
 
-            Launch(serial, d.Name, d.Key);
+            started = Launch(serial, d.Name, d.Key);
         }
         finally
         {
             _launching = false;
             BtnConnect.IsEnabled = true;
+            if (auto && !started)
+            {
+                // automatsko povezivanje nije uspelo — probaj ponovo za 20 s (ranije je odustajao zauvek)
+                _autoLaunched = false;
+                _nextAutoTry = DateTime.UtcNow.AddSeconds(20);
+            }
         }
         await RefreshAsync();
     }
@@ -310,12 +320,14 @@ public partial class MainWindow : Window
         serial ??= _devices.FirstOrDefault(d => d.Key == _s.SavedTimeoutKey && d.State == "device")?.Serial;
         if (serial == null) return; // telefon trenutno nije povezan — vratiće se kasnije
         await Phone.SetScreenTimeoutAsync(Adb, serial, _s.SavedTimeoutValue);
+        // obriši sačuvanu vrednost tek kad se potvrdi da je vraćena (posle prekida veze komanda ne prolazi)
+        if (await Phone.GetScreenTimeoutAsync(Adb, serial) != _s.SavedTimeoutValue) return;
         _s.SavedTimeoutKey = null;
         _s.SavedTimeoutValue = null;
         _s.Save();
     }
 
-    void Launch(string serial, string name, string key)
+    bool Launch(string serial, string name, string key)
     {
         var psi = new ProcessStartInfo(Path.Combine(_scrcpyDir!, "scrcpy.exe"))
         {
@@ -355,7 +367,11 @@ public partial class MainWindow : Window
                 Status("scrcpy se zatvorio sa greškom.");
             }
             else if (code == 2)
+            {
                 Status($"Veza sa telefonom „{name}“ je prekinuta.");
+                // veza pukla (nova IP, telefon van dometa) — kad se telefon ponovo pojavi, poveži ga sam
+                if (_scrcpy == p) { _autoLaunched = false; _nextAutoTry = DateTime.UtcNow.AddSeconds(5); }
+            }
             else
                 Status("scrcpy je zatvoren.");
         });
@@ -371,10 +387,12 @@ public partial class MainWindow : Window
             Status($"scrcpy pokrenut za „{name}“ ({serial}).");
             if (_s.ScreenOff) _ = ScreenOffAfterStartAsync(p);
             if (_s.TrayAfterConnect) _ = TrayAfterStartAsync(p, name);
+            return true;
         }
         catch (Exception ex)
         {
             Status("Ne mogu da pokrenem scrcpy: " + ex.Message);
+            return false;
         }
     }
 
@@ -387,7 +405,11 @@ public partial class MainWindow : Window
         var hwnd = await ScrcpyKeys.WaitForWindowAsync(p);
         if (hwnd == IntPtr.Zero) return;
         await Task.Delay(1500); // da se prikaz stabilizuje
-        await ScrcpyKeys.SendAltOAsync(hwnd);
+        for (int i = 0; i < 3 && !p.HasExited; i++)
+        {
+            if (await ScrcpyKeys.SendAltOAsync(hwnd)) return;
+            await Task.Delay(1000);
+        }
     }
 
     /// <summary>Kad se pojavi prozor scrcpy-ja, sakrij ScrcpyZ u tray.</summary>
@@ -484,6 +506,8 @@ public partial class MainWindow : Window
         _scrcpy.Refresh();
         if (await ScrcpyKeys.SendAltOAsync(_scrcpy.MainWindowHandle))
             Status("Ekran telefona je ugašen (prikaz u scrcpy-ju ostaje). Alt+Shift+O ga pali.");
+        else
+            Status("Prozor scrcpy-ja nije mogao da dobije fokus — klikni na njega i pritisni Alt+O.");
     }
 
     async void BtnRefresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
@@ -491,6 +515,12 @@ public partial class MainWindow : Window
     async void BtnFavorite_Click(object sender, RoutedEventArgs e)
     {
         if (DeviceList.SelectedItem is not DeviceInfo d) { Status("Izaberi telefon iz liste."); return; }
+        if (_s.FavoriteKey != d.Key && DeviceScanner.IsIpKey(d.Key))
+        {
+            // ključ bi bio IP adresa, koja se menja → omiljeni ne bi radio posle nove adrese
+            Status("Serijski broj telefona još nije poznat. Klikni „Poveži“, pa ponovo „★ Omiljeni“.");
+            return;
+        }
         _s.FavoriteKey = _s.FavoriteKey == d.Key ? null : d.Key;
         _s.Save();
         Status(_s.FavoriteKey == null ? "Omiljeni telefon uklonjen." : $"„{d.Name}“ je omiljeni telefon.");

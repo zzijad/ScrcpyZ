@@ -191,6 +191,8 @@ public static class DeviceScanner
     static readonly Dictionary<string, string> HwCache = new();
 
     /// <summary>"adb-R58M12345-AbCdEf(._adb-tls-connect._tcp)" → "R58M12345"</summary>
+    public static bool IsIpKey(string key) => IpSerial.IsMatch(key);
+
     public static string? HwSerial(string name)
     {
         int i = name.IndexOf("._adb-tls-connect", StringComparison.Ordinal);
@@ -199,8 +201,19 @@ public static class DeviceScanner
         return m.Success ? m.Groups[1].Value : null;
     }
 
+    static readonly Dictionary<string, DateTime> Suspect = new();
+
+    /// <summary>Beleži problem sa vezom; true kad problem traje duže od zadatog vremena.</summary>
+    static bool Strike(string serial, TimeSpan grace)
+    {
+        var now = DateTime.UtcNow;
+        if (!Suspect.TryGetValue(serial, out var since)) { Suspect[serial] = now; return false; }
+        return now - since >= grace;
+    }
+
     static async Task Disconnect(string adb, string serial)
     {
+        Suspect.Remove(serial);
         HwCache.Remove(serial);
         try { await Proc.RunAsync(adb, $"disconnect {serial}", 5000); } catch { }
     }
@@ -211,6 +224,14 @@ public static class DeviceScanner
 
         // 1) Već povezani uređaji (USB i bežični)
         var devOut = await Proc.RunAsync(adb, "devices -l");
+        if (!devOut.Contains("List of devices"))
+        {
+            // adb server je ugašen (npr. "adb kill-server"): ako ga pokrene ova komanda,
+            // server zadrži pipe i izlaz se izgubi. Pokreni ga zasebno i probaj ponovo.
+            await Proc.StartAdbServerAsync(adb);
+            devOut = await Proc.RunAsync(adb, "devices -l");
+        }
+        var seen = new HashSet<string>();
         foreach (var raw in devOut.Split('\n').Skip(1))
         {
             var m = DevLine.Match(raw.Trim());
@@ -221,10 +242,12 @@ public static class DeviceScanner
             bool isIp = IpSerial.IsMatch(serial);
             bool usb = !isTls && !isIp;
 
-            // Stara IP veza koja više ne radi (telefon dobio novu IP adresu ili port) — izbaci je
+            seen.Add(serial);
+            // Stara IP veza koja više ne radi (telefon dobio novu IP adresu ili port) — izbaci je,
+            // ali tek ako je "offline" duže od 15 s (odmah posle "adb connect" je kratko offline).
             if (isIp && state == "offline")
             {
-                await Disconnect(adb, serial);
+                if (Strike(serial, TimeSpan.FromSeconds(15))) await Disconnect(adb, serial);
                 continue;
             }
 
@@ -236,11 +259,12 @@ public static class DeviceScanner
                 if (p.Length > 0 && !p.Contains(' ')) { hw = p; HwCache[serial] = p; }
                 else if (isIp)
                 {
-                    // adb misli da je povezan, ali telefon ne odgovara na staroj adresi
-                    await Disconnect(adb, serial);
+                    // adb misli da je povezan, ali telefon ne odgovara — posle drugog neuspeha prekini vezu
+                    if (Strike(serial, TimeSpan.FromSeconds(8))) await Disconnect(adb, serial);
                     continue;
                 }
             }
+            if (state == "device") Suspect.Remove(serial);
 
             var model = Regex.Match(rest, @"model:(\S+)");
             string? name = model.Success ? model.Groups[1].Value.Replace('_', ' ') : null;
@@ -257,6 +281,17 @@ public static class DeviceScanner
                 Name = name ?? s.Names.GetValueOrDefault(key) ?? key
             });
         }
+
+        foreach (var k in Suspect.Keys.Where(k => !seen.Contains(k)).ToList()) Suspect.Remove(k);
+
+        // Isti telefon može biti povezan dvaput preko mreže (IP:port i adb-…._adb-tls-connect).
+        // Zadrži jednu stavku: povezanu, a među povezanima TLS (adb je sam održava).
+        result = result
+            .GroupBy(d => d.IsUsb ? "usb|" + d.Key : "net|" + d.Key)
+            .Select(g => g.OrderByDescending(d => d.State == "device")
+                          .ThenByDescending(d => d.Serial?.Contains("._adb-tls-connect") == true)
+                          .First())
+            .ToList();
 
         // 2) Telefoni koji se oglašavaju na mreži (Wireless debugging uključen)
         var mdnsOut = await Proc.RunAsync(adb, "mdns services");
@@ -290,6 +325,14 @@ public static class DeviceScanner
                 State = "available",
                 Name = s.Names.GetValueOrDefault(key) ?? key
             });
+        }
+
+        // Omiljeni je ranije mogao biti sačuvan pod IP:port (kad serijski broj nije bio poznat).
+        // Takav ključ prestaje da važi čim telefon dobije novu adresu → prebaci ga na serijski broj.
+        if (s.FavoriteKey != null && IpSerial.IsMatch(s.FavoriteKey))
+        {
+            var d = result.FirstOrDefault(x => (x.Serial == s.FavoriteKey || x.Address == s.FavoriteKey) && x.Key != s.FavoriteKey);
+            if (d != null) { s.FavoriteKey = d.Key; s.Save(); }
         }
 
         foreach (var d in result) d.IsFavorite = d.Key == s.FavoriteKey;
