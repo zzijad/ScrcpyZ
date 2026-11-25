@@ -22,6 +22,7 @@ public partial class MainWindow : Window
     string? _currentSerial;
     TrayIcon? _tray;
     DateTime _nextAutoTry = DateTime.MinValue;
+    DateTime _nextNetSearch = DateTime.MinValue;
 
     string Adb => _scrcpyDir != null && File.Exists(Path.Combine(_scrcpyDir, "adb.exe"))
         ? Path.Combine(_scrcpyDir, "adb.exe")
@@ -68,6 +69,7 @@ public partial class MainWindow : Window
         ChkAutoRefresh.IsChecked = _s.AutoRefresh;
         ChkAutoUnlock.IsChecked = _s.AutoUnlock;
         ChkTray.IsChecked = _s.TrayAfterConnect;
+        ChkFixedPort.IsChecked = _s.FixedPort;
         PinBox.Password = _s.Pin;
         if (_s.LockType == "pattern") RbPattern.IsChecked = true; else RbPin.IsChecked = true;
         UpdateLockUi();
@@ -121,6 +123,7 @@ public partial class MainWindow : Window
         _s.AutoRefresh = ChkAutoRefresh.IsChecked == true;
         _s.AutoUnlock = ChkAutoUnlock.IsChecked == true;
         _s.TrayAfterConnect = ChkTray.IsChecked == true;
+        _s.FixedPort = ChkFixedPort.IsChecked == true;
         _s.Pin = PinBox.Password;
         _s.LockType = RbPattern.IsChecked == true ? "pattern" : "pin";
         _s.Save();
@@ -159,6 +162,17 @@ public partial class MainWindow : Window
             }
 
             var found = await DeviceScanner.ScanAsync(Adb, _s);
+
+            // Omiljeni telefon nije vidljiv (mreža bez mDNS-a, nova IP adresa) → potraži ga na portu 5555
+            if (_s.FixedPort && ChkAutoConnect.IsChecked == true && _s.FavoriteKey != null && !ScrcpyRunning
+                && !found.Any(d => d.IsFavorite && d.State is "device" or "available")
+                && DateTime.UtcNow >= _nextNetSearch)
+            {
+                _nextNetSearch = DateTime.UtcNow.AddSeconds(30);
+                if (await FindOnNetworkAsync(_s.FavoriteKey))
+                    found = await DeviceScanner.ScanAsync(Adb, _s);
+            }
+
             UpdateList(found);
 
             Status(found.Count == 0
@@ -273,6 +287,9 @@ public partial class MainWindow : Window
             var serial = await EnsureConnectedAsync(d);
             if (serial == null) return;
 
+            if (_s.FixedPort && !d.IsUsb)
+                serial = await SwitchToFixedPortAsync(serial, d.Key) ?? serial;
+
             if (_s.AutoUnlock)
             {
                 Status("Otključavam telefon…");
@@ -295,6 +312,96 @@ public partial class MainWindow : Window
             }
         }
         await RefreshAsync();
+    }
+
+    // ---------- Stalni port 5555 (mreže bez mDNS-a) ----------
+
+    /// <summary>
+    /// Prebacuje telefon na port 5555 (adb tcpip). Port onda ostaje isti do restarta telefona,
+    /// pa ScrcpyZ može da ga pronađe i kad dobije novu IP adresu. Vraća novi serial ili null.
+    /// </summary>
+    async Task<string?> SwitchToFixedPortAsync(string serial, string key)
+    {
+        if (serial.EndsWith(":" + NetFinder.Port))
+        {
+            _s.LastAddress = serial; _s.Save();
+            return serial;
+        }
+
+        var ip = await Phone.WifiIpAsync(Adb, serial);
+        if (ip == null) return null;
+        var addr = $"{ip}:{NetFinder.Port}";
+
+        // Možda je već na 5555 (npr. posle ranijeg povezivanja)
+        if (!await NetFinder.IsOpenAsync(addr))
+        {
+            Status("Prebacujem telefon na stalni port 5555…");
+            await Proc.RunAsync(Adb, $"-s {serial} tcpip {NetFinder.Port}", 8000);
+        }
+
+        for (int i = 0; i < 10; i++)
+        {
+            await Task.Delay(1000);
+            var r = await Proc.RunAsync(Adb, $"connect {addr}", 5000);
+            if (r.Contains("connected to"))
+            {
+                if (await Phone.SerialNoAsync(Adb, addr) is { } sn && sn != key) break; // nije isti telefon
+                _s.LastAddress = addr; _s.Save();
+                return addr;
+            }
+        }
+        Status("Prebacivanje na port 5555 nije uspelo — nastavljam preko obične veze.");
+        return null;
+    }
+
+    /// <summary>Traži telefon sa datim serijskim brojem: prvo na poslednjoj adresi, pa na celoj mreži (port 5555).</summary>
+    async Task<bool> FindOnNetworkAsync(string key)
+    {
+        var candidates = new List<string>();
+        if (_s.LastAddress != null && await NetFinder.IsOpenAsync(_s.LastAddress))
+            candidates.Add(_s.LastAddress);
+
+        if (candidates.Count == 0)
+        {
+            Status("Tražim telefon na mreži (port 5555)…");
+            candidates = await NetFinder.ScanAsync();
+            if (_s.LastAddress != null && candidates.Remove(_s.LastAddress)) candidates.Insert(0, _s.LastAddress);
+        }
+
+        foreach (var addr in candidates)
+        {
+            var r = await Proc.RunAsync(Adb, $"connect {addr}", 5000);
+            if (!r.Contains("connected to")) continue;
+            await Task.Delay(500);
+            var sn = await Phone.SerialNoAsync(Adb, addr);
+            if (sn == key)
+            {
+                _s.LastAddress = addr; _s.Save();
+                Status($"Telefon pronađen na {addr}.");
+                return true;
+            }
+            if (!r.Contains("already")) await Proc.RunAsync(Adb, $"disconnect {addr}", 5000); // tuđi uređaj
+        }
+        return false;
+    }
+
+    async void BtnAddress_Click(object sender, RoutedEventArgs e)
+    {
+        var w = new AddressWindow(_s.LastAddress?.Split(':')[0] ?? "") { Owner = this };
+        if (w.ShowDialog() != true) return;
+
+        Status($"Povezujem {w.Address}…");
+        var r = await Proc.RunAsync(Adb, $"connect {w.Address}", 15000);
+        if (!r.Contains("connected to"))
+        {
+            Status("Povezivanje nije uspelo: " + r.Trim());
+            return;
+        }
+        _s.LastAddress = w.Address; _s.Save();
+        _nextAutoTry = DateTime.MinValue;
+        await Task.Delay(800);
+        await RefreshAsync();
+        Status($"Povezan na {w.Address}. Klikni „Poveži“.");
     }
 
     /// <summary>

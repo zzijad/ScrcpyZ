@@ -171,6 +171,22 @@ public static class Phone
         };
     }
 
+    /// <summary>IP adresa telefona na Wi-Fi mreži (wlan0).</summary>
+    public static async Task<string?> WifiIpAsync(string adb, string serial)
+    {
+        var r = await Sh(adb, serial, "ip -f inet addr show wlan0", 5000);
+        var m = Regex.Match(r, @"inet (\d+\.\d+\.\d+\.\d+)/");
+        if (m.Success) return m.Groups[1].Value;
+        var ip = Regex.Match(serial, @"^(\d+\.\d+\.\d+\.\d+):\d+$");
+        return ip.Success ? ip.Groups[1].Value : null;
+    }
+
+    public static async Task<string?> SerialNoAsync(string adb, string serial)
+    {
+        var p = (await Sh(adb, serial, "getprop ro.serialno", 5000)).Trim();
+        return p.Length > 0 && !p.Contains(' ') ? p : null;
+    }
+
     public const string KeepAwakeTimeout = "2147483647";
 
     public static async Task<string?> GetScreenTimeoutAsync(string adb, string serial)

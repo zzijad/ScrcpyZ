@@ -38,3 +38,11 @@ Kada se otvori prozor scrcpy-ja, ScrcpyZ se skloni u tray (pored sata). Isto se 
 - Desni klik nudi: Otvori ScrcpyZ, Prikaži scrcpy prozor, Otključaj telefon, Ugasi ekran telefona, Zatvori ScrcpyZ.
 - Kad se scrcpy zatvori, ScrcpyZ se sam vrati na ekran.
 - Isključuje se opcijom „Posle povezivanja idi u tray“.
+
+## Mreže bez mDNS-a (1.7)
+Neke mreže (škola, posao) ne propuštaju „oglašavanje“ uređaja (mDNS), pa ScrcpyZ ne vidi telefon i ne zna njegovu novu IP adresu.
+Opcija **„Stalni port 5555“** (uključena po defaultu) to rešava:
+- pri povezivanju ScrcpyZ prebaci telefon na port 5555 (`adb tcpip 5555`); port ostaje isti do restarta telefona,
+- kad omiljeni telefon nije u listi, ScrcpyZ proveri poslednju adresu, a zatim celu lokalnu mrežu na portu 5555 i po serijskom broju pronađe svoj telefon.
+
+Posle restarta telefona jednom klikni **„Poveži na adresu…“** i upiši IP:port iz Wireless debugging na telefonu.

@@ -1,6 +1,9 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -47,6 +50,8 @@ public class Settings
     public string Extra { get; set; } = "";
     public bool AutoUnlock { get; set; }
     public bool TrayAfterConnect { get; set; } = true; // posle pokretanja scrcpy-ja sakrij ScrcpyZ u tray
+    public bool FixedPort { get; set; } = true;        // prebaci telefon na port 5555 i traži ga po mreži (bez mDNS-a)
+    public string? LastAddress { get; set; }           // poslednja adresa omiljenog telefona (IP:port)
     public string LockType { get; set; } = "pin";   // "pin" ili "pattern"
     public string? PatternProtected { get; set; }    // šablon kao niz tačaka 1-9, šifrovan
     public double GridCenterX { get; set; } = 0.50;  // srednja kolona tačaka, udeo širine ekrana
@@ -337,5 +342,74 @@ public static class DeviceScanner
 
         foreach (var d in result) d.IsFavorite = d.Key == s.FavoriteKey;
         return result;
+    }
+}
+
+/// <summary>
+/// Traženje telefona bez mDNS-a: telefon prebačen na stalni port 5555 (adb tcpip 5555)
+/// pronalazi se proverom svih adresa lokalne mreže na tom portu.
+/// </summary>
+public static class NetFinder
+{
+    public const int Port = 5555;
+    const int MaxHosts = 4096;   // najviše /20 mreža
+
+    static IEnumerable<IPAddress> LocalHosts()
+    {
+        var seen = new HashSet<uint>();
+        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (ni.OperationalStatus != OperationalStatus.Up) continue;
+            if (ni.NetworkInterfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel) continue;
+            foreach (var ua in ni.GetIPProperties().UnicastAddresses)
+            {
+                if (ua.Address.AddressFamily != AddressFamily.InterNetwork || ua.IPv4Mask == null) continue;
+                uint ip = ToUint(ua.Address), mask = ToUint(ua.IPv4Mask);
+                if (mask == 0) continue;
+                uint net = ip & mask, bcast = net | ~mask;
+                if (bcast - net > MaxHosts) continue; // prevelika mreža
+                if ((ip >> 16) == 0xA9FE) continue;  // 169.254.x.x
+                for (uint h = net + 1; h < bcast; h++)
+                    if (h != ip && seen.Add(h)) yield return FromUint(h);
+            }
+        }
+    }
+
+    static uint ToUint(IPAddress a) { var b = a.GetAddressBytes(); return (uint)(b[0] << 24 | b[1] << 16 | b[2] << 8 | b[3]); }
+    static IPAddress FromUint(uint v) => new(new[] { (byte)(v >> 24), (byte)(v >> 16), (byte)(v >> 8), (byte)v });
+
+    static async Task<bool> PortOpenAsync(IPAddress ip, int port, int timeoutMs)
+    {
+        using var c = new TcpClient();
+        using var cts = new CancellationTokenSource(timeoutMs);
+        try { await c.ConnectAsync(ip, port, cts.Token); return c.Connected; }
+        catch { return false; }
+    }
+
+    /// <summary>Sve adrese u lokalnoj mreži na kojima je otvoren port 5555 ("IP:5555").</summary>
+    public static async Task<List<string>> ScanAsync(int timeoutMs = 500)
+    {
+        var found = new List<string>();
+        using var gate = new SemaphoreSlim(256);
+        var tasks = LocalHosts().Select(async ip =>
+        {
+            await gate.WaitAsync();
+            try
+            {
+                if (await PortOpenAsync(ip, Port, timeoutMs))
+                    lock (found) found.Add($"{ip}:{Port}");
+            }
+            finally { gate.Release(); }
+        }).ToList();
+        await Task.WhenAll(tasks);
+        return found;
+    }
+
+    public static Task<bool> IsOpenAsync(string address, int timeoutMs = 800)
+    {
+        var parts = address.Split(':');
+        return parts.Length == 2 && IPAddress.TryParse(parts[0], out var ip) && int.TryParse(parts[1], out var port)
+            ? PortOpenAsync(ip, port, timeoutMs)
+            : Task.FromResult(false);
     }
 }

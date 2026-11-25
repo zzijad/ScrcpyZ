@@ -75,6 +75,8 @@
                     <Separator Margin="0,8"/>
                     <CheckBox x:Name="ChkAutoConnect" Content="Automatski poveži omiljeni telefon"/>
                     <CheckBox x:Name="ChkAutoRefresh" Content="Automatski osvežavaj listu"/>
+                    <CheckBox x:Name="ChkFixedPort" Content="Stalni port 5555 (traži telefon po mreži)"
+                              ToolTip="Za mreže koje ne propuštaju mDNS (škola, posao): telefon se prebaci na port 5555, pa ga ScrcpyZ pronalazi i kad dobije novu IP adresu. Posle restarta telefona treba jednom „Poveži na adresu…“."/>
                     <CheckBox x:Name="ChkTray" Content="Posle povezivanja idi u tray"
                               ToolTip="Kad se otvori scrcpy, ScrcpyZ se skloni pored sata. Klik na ikonu ga vraća."/>
                     <Button Content="Folder scrcpy-ja…" Style="{StaticResource Btn}" Margin="0,10,0,0"
@@ -87,6 +89,8 @@
         <DockPanel Grid.Row="2" Grid.ColumnSpan="3" Margin="0,12,0,0" LastChildFill="False">
             <Button Content="⟳  Osveži" Style="{StaticResource Btn}" Click="BtnRefresh_Click"/>
             <Button Content="Upari telefon…" Style="{StaticResource Btn}" Click="BtnPair_Click"/>
+            <Button Content="Poveži na adresu…" Style="{StaticResource Btn}" Click="BtnAddress_Click"
+                    ToolTip="Ručno povezivanje preko IP:port (iz Wireless debugging na telefonu)"/>
             <Button Content="★  Omiljeni" Style="{StaticResource Btn}" Click="BtnFavorite_Click"
                     ToolTip="Označi izabrani telefon kao omiljeni (za automatsko povezivanje)"/>
             <Button Content="🔓  Otključaj" Style="{StaticResource Btn}" Click="BtnUnlock_Click"
